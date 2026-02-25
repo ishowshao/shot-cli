@@ -3,25 +3,36 @@ import SwiftUI
 @main
 struct ShotCliApp: App {
     init() {
-        let args = Array(CommandLine.arguments.dropFirst())
-        guard let first = args.first else { return }
+        let rawArgs = Array(CommandLine.arguments.dropFirst())
+        let args = rawArgs.filter { !$0.hasPrefix("-psn_") }
 
-        let cliCommands: Set<String> = [
-            "help",
-            "--help",
-            "-h",
-            "version",
-            "doctor",
-            "displays",
-            "windows",
-            "capture"
-        ]
-        guard cliCommands.contains(first) else { return }
+        if let relayIndex = args.firstIndex(of: ShotCLIRequestRelay.command) {
+            let relayArgs = Array(args[relayIndex...])
+            let exitCode = ShotCLIRequestRelay.handle(arguments: relayArgs)
+            fflush(stdout)
+            fflush(stderr)
+            Darwin.exit(exitCode)
+        }
 
-        let exitCode = ShotCLI().run(arguments: args)
-        fflush(stdout)
-        fflush(stderr)
-        Darwin.exit(exitCode)
+        if let first = args.first {
+            let cliCommands: Set<String> = [
+                "help",
+                "--help",
+                "-h",
+                "version",
+                "doctor",
+                "displays",
+                "windows",
+                "capture"
+            ]
+
+            if cliCommands.contains(first) {
+                let exitCode = ShotCLIEntrypoint.run(arguments: args)
+                fflush(stdout)
+                fflush(stderr)
+                Darwin.exit(exitCode)
+            }
+        }
     }
 
     var body: some Scene {
