@@ -1,27 +1,86 @@
 import Darwin
 import Foundation
 
-private enum ShotIPCPaths {
-    static var rootDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base.appendingPathComponent("ShotCli/ipc", isDirectory: true)
+private enum ShotCLIXPCConfig {
+    static let machServiceName = "com.shshaoxia.ShotCli.CLIService"
+    static let launchAgentLabel = "com.shshaoxia.ShotCli.CLIService"
+}
+
+enum ShotCLIXPCLaunchAgent {
+    static let serviceCommand = "__shotcli_xpc_service"
+
+    static func ensureLoaded(serviceExecutablePath: String) throws {
+        try writeLaunchAgentPlist(serviceExecutablePath: serviceExecutablePath)
+
+        let domain = launchDomain
+        let service = "\(domain)/\(ShotCLIXPCConfig.launchAgentLabel)"
+
+        let printResult = try runLaunchctl(arguments: ["print", service], allowFailure: true)
+        if printResult.status != 0 {
+            _ = try runLaunchctl(arguments: ["bootstrap", domain, launchAgentPlistURL.path], allowFailure: false)
+        } else {
+            let expectedProgramLine = "program = \(serviceExecutablePath)"
+            if !printResult.stdout.contains(expectedProgramLine) {
+                _ = try runLaunchctl(arguments: ["bootout", service], allowFailure: true)
+                _ = try runLaunchctl(arguments: ["bootstrap", domain, launchAgentPlistURL.path], allowFailure: false)
+            }
+        }
+
+        _ = try runLaunchctl(arguments: ["kickstart", service], allowFailure: false)
     }
 
-    static var requestsDirectory: URL {
-        rootDirectory.appendingPathComponent("requests", isDirectory: true)
+    static var launchDomain: String {
+        "gui/\(getuid())"
     }
 
-    static var responsesDirectory: URL {
-        rootDirectory.appendingPathComponent("responses", isDirectory: true)
+    private static var launchAgentPlistURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(ShotCLIXPCConfig.launchAgentLabel).plist", isDirectory: false)
     }
 
-    static func requestURL(id: String) -> URL {
-        requestsDirectory.appendingPathComponent("\(id).json", isDirectory: false)
+    private static func writeLaunchAgentPlist(serviceExecutablePath: String) throws {
+        let launchAgentsDirectory = launchAgentPlistURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: launchAgentsDirectory, withIntermediateDirectories: true)
+
+        let plist: [String: Any] = [
+            "Label": ShotCLIXPCConfig.launchAgentLabel,
+            "ProgramArguments": [serviceExecutablePath, serviceCommand],
+            "MachServices": [ShotCLIXPCConfig.machServiceName: true],
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ProcessType": "Interactive"
+        ]
+
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: launchAgentPlistURL, options: .atomic)
     }
 
-    static func responseURL(id: String) -> URL {
-        responsesDirectory.appendingPathComponent("\(id).json", isDirectory: false)
+    @discardableResult
+    private static func runLaunchctl(arguments: [String], allowFailure: Bool) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutText = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderrText = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if !allowFailure && process.terminationStatus != 0 {
+            let suffix = stderrText.isEmpty ? "" : " \(stderrText)"
+            throw ShotCLIServiceClientError.unavailable("launchctl \(arguments.joined(separator: " ")) failed.\(suffix)")
+        }
+
+        return (process.terminationStatus, stdoutText, stderrText)
     }
 }
 
@@ -32,7 +91,12 @@ private struct ShotCLIStdIOCaptureResult {
 }
 
 private enum ShotCLIStdIOCapture {
+    private static let lock = NSLock()
+
     static func run(arguments: [String]) -> ShotCLIStdIOCaptureResult {
+        lock.lock()
+        defer { lock.unlock() }
+
         fflush(stdout)
         fflush(stderr)
 
@@ -70,80 +134,45 @@ private enum ShotCLIStdIOCapture {
     }
 }
 
-private enum ShotCLIRequestRelayCodec {
-    static func prepareDirectories() throws {
-        try FileManager.default.createDirectory(at: ShotIPCPaths.requestsDirectory, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: ShotIPCPaths.responsesDirectory, withIntermediateDirectories: true)
+@objc protocol ShotCLIXPCProtocol {
+    func ping(withReply reply: @escaping (Bool) -> Void)
+    func runCommand(arguments: [String], withReply reply: @escaping (Int32, Data, Data) -> Void)
+}
+
+final class ShotCLIXPCService: NSObject, ShotCLIXPCProtocol {
+    func ping(withReply reply: @escaping (Bool) -> Void) {
+        reply(true)
     }
 
-    static func writeRequest(id: String, arguments: [String]) throws {
-        let requestJSON: [String: Any] = [
-            "arguments": arguments,
-            "createdAt": ISO8601DateFormatter().string(from: Date())
-        ]
-        let data = try JSONSerialization.data(withJSONObject: requestJSON, options: [])
-        try data.write(to: ShotIPCPaths.requestURL(id: id), options: .atomic)
-    }
-
-    static func loadRequestArguments(id: String) throws -> [String] {
-        let data = try Data(contentsOf: ShotIPCPaths.requestURL(id: id))
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arguments = json["arguments"] as? [String]
-        else {
-            throw NSError(domain: "ShotCli", code: Int(ShotExitCode.invalidArguments.rawValue))
-        }
-        return arguments
-    }
-
-    static func writeResponse(id: String, result: ShotCLIStdIOCaptureResult) throws {
-        let responseJSON: [String: Any] = [
-            "exitCode": result.exitCode,
-            "stdoutBase64": result.stdout.base64EncodedString(),
-            "stderrBase64": result.stderr.base64EncodedString()
-        ]
-        let data = try JSONSerialization.data(withJSONObject: responseJSON, options: [])
-        try data.write(to: ShotIPCPaths.responseURL(id: id), options: .atomic)
-    }
-
-    static func loadResponse(id: String) throws -> ShotCLIServiceClientResult {
-        let data = try Data(contentsOf: ShotIPCPaths.responseURL(id: id))
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let exitCode = json["exitCode"] as? Int
-        else {
-            throw NSError(domain: "ShotCli", code: Int(ShotExitCode.captureFailed.rawValue))
-        }
-
-        let stdout = Data(base64Encoded: (json["stdoutBase64"] as? String) ?? "") ?? Data()
-        let stderr = Data(base64Encoded: (json["stderrBase64"] as? String) ?? "") ?? Data()
-
-        return ShotCLIServiceClientResult(exitCode: Int32(exitCode), stdout: stdout, stderr: stderr)
+    func runCommand(arguments: [String], withReply reply: @escaping (Int32, Data, Data) -> Void) {
+        let result = ShotCLIStdIOCapture.run(arguments: arguments)
+        reply(Int32(result.exitCode), result.stdout, result.stderr)
     }
 }
 
-enum ShotCLIRequestRelay {
-    static let command = "__shotcli_handle_request"
+final class ShotCLIXPCServer: NSObject, NSXPCListenerDelegate {
+    static let shared = ShotCLIXPCServer()
 
-    static func handle(arguments: [String]) -> Int32 {
-        guard arguments.count >= 2 else {
-            return ShotExitCode.invalidArguments.rawValue
+    private let stateQueue = DispatchQueue(label: "com.shshaoxia.ShotCli.xpc.server")
+    private let service = ShotCLIXPCService()
+    private var listener: NSXPCListener?
+
+    func startIfNeeded() {
+        stateQueue.sync {
+            guard listener == nil else { return }
+
+            let newListener = NSXPCListener(machServiceName: ShotCLIXPCConfig.machServiceName)
+            newListener.delegate = self
+            newListener.resume()
+            listener = newListener
         }
+    }
 
-        let requestID = arguments[1]
-
-        do {
-            let requestArguments = try ShotCLIRequestRelayCodec.loadRequestArguments(id: requestID)
-            let result = ShotCLIStdIOCapture.run(arguments: requestArguments)
-            try ShotCLIRequestRelayCodec.writeResponse(id: requestID, result: result)
-            return ShotExitCode.ok.rawValue
-        } catch {
-            let payload = ShotCLIStdIOCaptureResult(
-                exitCode: Int(ShotExitCode.serviceUnavailable.rawValue),
-                stdout: Data(),
-                stderr: Data("{\"ok\":false,\"error\":{\"code\":10,\"name\":\"ERR_SERVICE_UNAVAILABLE\",\"message\":\"Failed to process relayed CLI request.\"}}\n".utf8)
-            )
-            try? ShotCLIRequestRelayCodec.writeResponse(id: requestID, result: payload)
-            return ShotExitCode.serviceUnavailable.rawValue
-        }
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
+        newConnection.exportedInterface = NSXPCInterface(with: ShotCLIXPCProtocol.self)
+        newConnection.exportedObject = service
+        newConnection.resume()
+        return true
     }
 }
 
@@ -153,33 +182,163 @@ struct ShotCLIServiceClientResult {
     let stderr: Data
 }
 
-private enum ShotCLIServiceClientError: Error {
+enum ShotCLIServiceClientError: Error {
     case unavailable(String)
 }
 
 final class ShotCLIServiceClient {
+    private let runTimeoutSeconds: TimeInterval = 20
+
     func run(arguments: [String]) throws -> ShotCLIServiceClientResult {
-        try ShotCLIRequestRelayCodec.prepareDirectories()
+        let executablePath = try resolveServiceExecutablePath()
 
-        let requestID = UUID().uuidString.lowercased()
-        let requestURL = ShotIPCPaths.requestURL(id: requestID)
-        let responseURL = ShotIPCPaths.responseURL(id: requestID)
-
-        defer {
-            try? FileManager.default.removeItem(at: requestURL)
-            try? FileManager.default.removeItem(at: responseURL)
+        do {
+            try ShotCLIXPCLaunchAgent.ensureLoaded(serviceExecutablePath: executablePath)
+            try waitForServiceReady(timeout: 5)
+            return try runViaMachService(arguments: arguments, timeout: runTimeoutSeconds)
+        } catch {
+            try launchShotCliApp()
+            try ShotCLIXPCLaunchAgent.ensureLoaded(serviceExecutablePath: executablePath)
+            try waitForServiceReady(timeout: 8)
+            return try runViaMachService(arguments: arguments, timeout: runTimeoutSeconds)
         }
-
-        try ShotCLIRequestRelayCodec.writeRequest(id: requestID, arguments: arguments)
-        try launchRelayWorker(requestID: requestID)
-
-        guard FileManager.default.fileExists(atPath: responseURL.path) else {
-            throw ShotCLIServiceClientError.unavailable("Relay worker completed but no response file was generated.")
-        }
-        return try ShotCLIRequestRelayCodec.loadResponse(id: requestID)
     }
 
-    private func launchRelayWorker(requestID: String) throws {
+    private func resolveServiceExecutablePath() throws -> String {
+        guard let executableURL = Bundle.main.executableURL else {
+            throw ShotCLIServiceClientError.unavailable("Unable to resolve ShotCli executable path.")
+        }
+        return executableURL.resolvingSymlinksInPath().path
+    }
+
+    private func waitForServiceReady(timeout: TimeInterval) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastError: Error?
+
+        while Date() < deadline {
+            do {
+                if try pingViaMachService(timeout: 1) {
+                    return
+                }
+            } catch {
+                lastError = error
+            }
+
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+
+        throw ShotCLIServiceClientError.unavailable("XPC service did not become ready in time. \(lastError?.localizedDescription ?? "")")
+    }
+
+    private func pingViaMachService(timeout: TimeInterval) throws -> Bool {
+        let connection = NSXPCConnection(machServiceName: ShotCLIXPCConfig.machServiceName, options: [])
+        connection.remoteObjectInterface = NSXPCInterface(with: ShotCLIXPCProtocol.self)
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let resultLock = NSLock()
+        var reply: Bool?
+        var replyError: Error?
+
+        func finishWithError(_ error: Error) {
+            resultLock.lock()
+            defer { resultLock.unlock() }
+            guard reply == nil, replyError == nil else { return }
+            replyError = error
+            semaphore.signal()
+        }
+
+        connection.interruptionHandler = {
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC connection interrupted."))
+        }
+        connection.invalidationHandler = {
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC connection invalidated."))
+        }
+
+        connection.resume()
+
+        guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC call failed: \(error.localizedDescription)"))
+        }) as? ShotCLIXPCProtocol else {
+            connection.invalidate()
+            throw ShotCLIServiceClientError.unavailable("Failed to create XPC proxy.")
+        }
+
+        proxy.ping { ok in
+            resultLock.lock()
+            defer { resultLock.unlock() }
+            guard reply == nil, replyError == nil else { return }
+            reply = ok
+            semaphore.signal()
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + timeout)
+        connection.invalidate()
+
+        if waitResult == .timedOut {
+            throw ShotCLIServiceClientError.unavailable("Timed out waiting for XPC ping response.")
+        }
+        if let value = reply {
+            return value
+        }
+
+        throw replyError ?? ShotCLIServiceClientError.unavailable("XPC ping finished without a response.")
+    }
+
+    private func runViaMachService(arguments: [String], timeout: TimeInterval) throws -> ShotCLIServiceClientResult {
+        let connection = NSXPCConnection(machServiceName: ShotCLIXPCConfig.machServiceName, options: [])
+        connection.remoteObjectInterface = NSXPCInterface(with: ShotCLIXPCProtocol.self)
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let resultLock = NSLock()
+        var replyResult: ShotCLIServiceClientResult?
+        var replyError: Error?
+
+        func finishWithError(_ error: Error) {
+            resultLock.lock()
+            defer { resultLock.unlock() }
+            guard replyResult == nil, replyError == nil else { return }
+            replyError = error
+            semaphore.signal()
+        }
+
+        connection.interruptionHandler = {
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC connection interrupted."))
+        }
+        connection.invalidationHandler = {
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC connection invalidated."))
+        }
+
+        connection.resume()
+
+        guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+            finishWithError(ShotCLIServiceClientError.unavailable("XPC call failed: \(error.localizedDescription)"))
+        }) as? ShotCLIXPCProtocol else {
+            connection.invalidate()
+            throw ShotCLIServiceClientError.unavailable("Failed to create XPC proxy.")
+        }
+
+        proxy.runCommand(arguments: arguments) { exitCode, stdout, stderr in
+            resultLock.lock()
+            defer { resultLock.unlock() }
+            guard replyResult == nil, replyError == nil else { return }
+            replyResult = ShotCLIServiceClientResult(exitCode: exitCode, stdout: stdout, stderr: stderr)
+            semaphore.signal()
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + timeout)
+        connection.invalidate()
+
+        if waitResult == .timedOut {
+            throw ShotCLIServiceClientError.unavailable("Timed out waiting for XPC response.")
+        }
+        if let result = replyResult {
+            return result
+        }
+
+        throw replyError ?? ShotCLIServiceClientError.unavailable("XPC request finished without a response.")
+    }
+
+    private func launchShotCliApp() throws {
         let bundlePath = Bundle.main.bundleURL.path
         guard FileManager.default.fileExists(atPath: bundlePath) else {
             throw ShotCLIServiceClientError.unavailable("ShotCli.app bundle path not found.")
@@ -187,14 +346,14 @@ final class ShotCLIServiceClient {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-W", "-n", "-a", bundlePath, "--args", ShotCLIRequestRelay.command, requestID]
+        process.arguments = ["-g", "-a", bundlePath]
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         try process.run()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            throw ShotCLIServiceClientError.unavailable("Failed to launch relay worker app instance.")
+            throw ShotCLIServiceClientError.unavailable("Failed to launch ShotCli.app.")
         }
     }
 }

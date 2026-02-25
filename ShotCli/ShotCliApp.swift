@@ -6,12 +6,9 @@ struct ShotCliApp: App {
         let rawArgs = Array(CommandLine.arguments.dropFirst())
         let args = rawArgs.filter { !$0.hasPrefix("-psn_") }
 
-        if let relayIndex = args.firstIndex(of: ShotCLIRequestRelay.command) {
-            let relayArgs = Array(args[relayIndex...])
-            let exitCode = ShotCLIRequestRelay.handle(arguments: relayArgs)
-            fflush(stdout)
-            fflush(stderr)
-            Darwin.exit(exitCode)
+        if args.first == ShotCLIXPCLaunchAgent.serviceCommand {
+            ShotCLIXPCServer.shared.startIfNeeded()
+            dispatchMain()
         }
 
         if let first = args.first {

@@ -223,7 +223,7 @@ final class ShotCLI {
             "ok": hasScreenRecordingPermission,
             "service": [
                 "running": true,
-                "endpoint": "app-relay"
+                "endpoint": "xpc"
             ],
             "permissions": [
                 "screenRecording": hasScreenRecordingPermission ? "granted" : "missing",
