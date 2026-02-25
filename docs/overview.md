@@ -1,9 +1,9 @@
 # Shot CLI — macOS 14+ 非交互式截图工具（命令行规范）
 
 > 目标：提供一个 **非交互式** 的截图/枚举工具，可在脚本、CI、自动化流程中使用。  
-> 实现建议：`ShotCli.app`（原生权限与服务） + `shot`（CLI）通过 XPC 通讯；CLI 不直接触发 UI。
+> 实现建议：`shot` 采用 **pure CLI in-process** 路径执行；`ShotCli.app` 仅用于权限引导和命令安装（可选）。
 
-> 验证当前 XPC 实现是否可用：见 `docs/xpc-verification.md`。
+> 验证 pure CLI 实现：见 `docs/pure-cli-verification.md`。
 
 ---
 
@@ -21,15 +21,15 @@
 
 ## 2. 安装与运行形态（建议）
 
-- `ShotCli.app`：负责引导/检查权限（Screen Recording），并提供本地服务（XPC 推荐）。
+- `ShotCli.app`：负责引导/检查权限（Screen Recording），并提供命令安装入口（可选）。
 - `shot`：CLI 可执行文件。推荐放在 `ShotCli.app/Contents/MacOS/shot` 并提供软链到 PATH：
   - `/usr/local/bin/shot` 或 `~/.local/bin/shot`
 
 建议在 GUI 中提供 `Install "shot" Command` 一键安装（默认 `~/.local/bin`，无需管理员权限）。
 
 CLI 行为建议：
-- 如服务未运行，CLI 尝试启动/唤醒服务（或返回 `10`，并给出 hint）。
-- 权限不足时，CLI 返回 `11`，提示用户打开 `ShotCli.app` 完成授权。
+- 命令默认 in-process 执行，不依赖 XPC 服务。
+- 权限不足时，CLI 返回 `11`，并提示给终端宿主（Terminal/iTerm）授权。
 
 ---
 
@@ -56,6 +56,8 @@ CLI 行为建议：
 shot --help
 shot version
 shot doctor
+shot open-permissions
+shot request-permission
 
 shot displays [--json] [--pretty]
 shot windows [--json] [--pretty] [--onscreen|--all] [--app <bundleId|name>] [--frontmost]
@@ -84,13 +86,13 @@ shot doctor [--json] [--pretty]
 ```json
 {
   "ok": false,
-  "service": { "running": true, "endpoint": "xpc" },
+  "service": { "running": true, "mode": "in_process", "entrypoint": "shot" },
   "permissions": {
     "screenRecording": "missing",
     "accessibility": "notRequested"
   },
   "hints": [
-    "Open ShotCli.app once and enable Screen Recording in System Settings > Privacy & Security."
+    "Grant Screen Recording to Terminal/iTerm in System Settings > Privacy & Security > Screen Recording, then restart terminal."
   ]
 }
 ```
@@ -98,7 +100,7 @@ shot doctor [--json] [--pretty]
 ### 退出码
 
 * `0`：OK
-* `10`：服务不可用/无法连接
+* `10`：辅助动作不可用（如无法拉起系统设置）
 * `11`：缺少 Screen Recording 权限（关键）
 * `12`：缺少 Accessibility 权限（仅当使用 `--frontmost` / 强依赖标题等能力时）
 
@@ -260,7 +262,7 @@ shot capture --window 12345 --out-dir ~/Desktop --name "{date}_{app}_{id}.{ext}"
     "code": 11,
     "name": "ERR_PERMISSION_SCREEN_RECORDING",
     "message": "Screen Recording permission is required.",
-    "hint": "Open ShotCli.app and enable Screen Recording in System Settings > Privacy & Security."
+    "hint": "Grant Screen Recording to Terminal/iTerm in System Settings > Privacy & Security > Screen Recording, then restart terminal."
   }
 }
 ```
@@ -275,7 +277,7 @@ shot capture --window 12345 --out-dir ~/Desktop --name "{date}_{app}_{id}.{ext}"
 
 * `0`：成功
 * `2`：参数错误（缺参数/冲突/rect 格式非法）
-* `10`：服务不可用（XPC 连接失败/ShotCli.app 未安装或未运行）
+* `10`：辅助动作不可用（如无法打开系统设置）
 * `11`：缺少 Screen Recording 权限
 * `12`：缺少 Accessibility 权限（仅当请求相关能力）
 * `13`：目标不存在（windowId/displayId 找不到）
@@ -322,4 +324,4 @@ shot capture --display 69733248 --rect 100,200,800,600 --out /tmp/roi.png
 
 * 最低系统：**macOS 14+**
 * 推荐截图/枚举后端：**ScreenCaptureKit**
-* 建议通讯方式：**XPC（本地进程间通讯）**
+* 执行方式：**pure CLI in-process**

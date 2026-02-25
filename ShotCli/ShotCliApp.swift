@@ -13,6 +13,8 @@ struct ShotCliApp: App {
                 "-h",
                 "version",
                 "doctor",
+                "open-permissions",
+                "request-permission",
                 "displays",
                 "windows",
                 "capture"

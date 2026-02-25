@@ -136,7 +136,7 @@ struct ContentView: View {
 
             PermissionCard(
                 title: "Screen Recording",
-                detail: "Required for `shot capture`, `shot displays`, and `shot windows`. Request it here first, then enable in System Settings.",
+                detail: "Required for `shot capture` and `shot windows`. You can request it here, then enable it in System Settings.",
                 state: screenRecording,
                 onRequest: requestScreenRecordingPermission,
                 onOpenSettings: { openPrivacySettings(anchor: "Privacy_ScreenCapture") }
@@ -156,7 +156,7 @@ struct ContentView: View {
                 Text("Run `shot doctor --pretty` in terminal for script-friendly health checks.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("Permissions should be granted via this app so CLI calls go through ShotCli's XPC service identity.")
+                Text("For CLI workflows, grant Screen Recording to your terminal host app (Terminal/iTerm) in System Settings.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("If ShotCli does not appear in Accessibility list, move ShotCli.app to /Applications and click Request Permission again.")

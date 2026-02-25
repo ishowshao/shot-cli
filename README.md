@@ -1,20 +1,19 @@
 # ShotCli
 
-ShotCli is a non-interactive screenshot tool for macOS. It provides a GUI for permission onboarding and command setup, and a `shot` CLI for automation, scripting, and CI workflows.
+ShotCli is a non-interactive screenshot tool for macOS. It is now **CLI-first and pure CLI**: `shot` commands run in-process with no XPC forwarding.
 
 ## Key Features
 
 - Non-interactive capture (no mouse selection UI required)
 - Display/window enumeration before capture
 - Structured JSON output with stable exit codes
-- Local XPC architecture (`shot` -> `ShotCliXPCService`)
+- Pure CLI execution path (`shot` runs in-process)
 
 ## Architecture
 
-- `ShotCli.app`: main app for permission onboarding and CLI command installation
+- `ShotCli.app`: optional GUI for command installation and permission onboarding
 - `shot`: CLI entrypoint (`ShotCli.app/Contents/MacOS/shot`)
-- `ShotCliXPCService.xpc`: embedded XPC service for `doctor/displays/windows/capture`
-- `ShotCliCore`: shared CLI engine and XPC protocol
+- `ShotCliCore`: shared CLI engine
 
 ## Requirements
 
@@ -65,16 +64,19 @@ shot capture --display 4 --out ~/Downloads/lg-ultrafine.png --pretty
 
 ## Permissions
 
-Screen Recording permission is required for capture and window enumeration.
+Screen Recording permission is required for `shot windows` and `shot capture`.
 
-- Click `Request Permission` in `ShotCli.app`
-- Enable access for ShotCli in System Settings
-- If missing, related commands return exit code `11`
+- Grant Screen Recording to your **terminal host app** (`Terminal`/`iTerm`) in:
+  - `System Settings > Privacy & Security > Screen Recording`
+- You can use:
+  - `shot open-permissions`
+  - `shot request-permission`
+- If missing, related commands return exit code `11`.
 
 ## Common Exit Codes
 
 - `0`: success
-- `10`: service unavailable
+- `10`: unavailable helper action (for example, failed to open System Settings)
 - `11`: missing Screen Recording permission
 - `14`: capture/enumeration failure
 - `15`: output write failure
@@ -83,19 +85,18 @@ Screen Recording permission is required for capture and window enumeration.
 
 See:
 
-- `docs/xpc-verification.md`
+- `docs/pure-cli-verification.md`
 
 Quick validation script:
 
 ```bash
-scripts/verify-xpc-flow.sh --display-name "LG ULTRAFINE"
+scripts/verify-cli-flow.sh --display-name "LG ULTRAFINE"
 ```
 
 ## Repository Layout
 
-- `ShotCli/`: main app (SwiftUI UI, IPC client)
-- `ShotCliCore/`: shared CLI engine and protocol
-- `ShotCliXPCService/`: XPC service entrypoint
+- `ShotCli/`: main app (SwiftUI UI + CLI entrypoint)
+- `ShotCliCore/`: shared CLI engine
 - `scripts/`: helper scripts
 - `docs/`: design and verification docs
 

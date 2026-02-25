@@ -5,7 +5,22 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-private let screenRecordingGrantHint = "Open ShotCli.app, click Request Permission, then enable Screen Recording in System Settings > Privacy & Security."
+private let screenRecordingGrantHint: String = {
+    let termProgram = ProcessInfo.processInfo.environment["TERM_PROGRAM"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let hostName: String
+    if termProgram.isEmpty {
+        hostName = "Terminal/iTerm"
+    } else if termProgram == "Apple_Terminal" {
+        hostName = "Terminal"
+    } else if termProgram.hasSuffix(".app") {
+        hostName = String(termProgram.dropLast(4))
+    } else {
+        hostName = termProgram
+    }
+
+    return "Grant Screen Recording to \(hostName) in System Settings > Privacy & Security > Screen Recording, then restart \(hostName)."
+}()
+private let screenRecordingGrantHintWithCommand = "\(screenRecordingGrantHint) Run 'shot open-permissions' to open settings quickly."
 
 enum ShotExitCode: Int32 {
     case ok = 0
@@ -146,6 +161,10 @@ final class ShotCLI {
                 return handleVersion(arguments: Array(arguments.dropFirst()))
             case "doctor":
                 return try handleDoctor(arguments: Array(arguments.dropFirst()))
+            case "open-permissions":
+                return try handleOpenPermissions(arguments: Array(arguments.dropFirst()))
+            case "request-permission":
+                return try handleRequestPermission(arguments: Array(arguments.dropFirst()))
             case "displays":
                 return try handleDisplays(arguments: Array(arguments.dropFirst()))
             case "windows":
@@ -181,6 +200,8 @@ final class ShotCLI {
             shot --help
             shot version
             shot doctor [--json] [--pretty]
+            shot open-permissions [--json] [--pretty]
+            shot request-permission [--json] [--pretty]
             shot displays [--json] [--pretty]
             shot windows [--json] [--pretty] [--onscreen|--all] [--app <bundleId|name>] [--frontmost]
             shot capture ( --display <displayId> | --window <windowId> )
@@ -219,14 +240,15 @@ final class ShotCLI {
         var hints: [String] = []
         if !hasScreenRecordingPermission {
             hints.append(screenRecordingGrantHint)
+            hints.append("Run 'shot open-permissions' to open the Screen Recording settings pane.")
         }
 
         let payload: [String: Any] = [
             "ok": hasScreenRecordingPermission,
             "service": [
                 "running": true,
-                "endpoint": "xpc",
-                "name": ShotCLIXPCConstants.serviceName
+                "mode": "in_process",
+                "entrypoint": "shot"
             ],
             "permissions": [
                 "screenRecording": hasScreenRecordingPermission ? "granted" : "missing",
@@ -237,6 +259,74 @@ final class ShotCLI {
 
         CLIOutput.writeJSON(payload, pretty: pretty)
         return hasScreenRecordingPermission ? ShotExitCode.ok.rawValue : ShotExitCode.missingScreenRecordingPermission.rawValue
+    }
+
+    private func handleOpenPermissions(arguments: [String]) throws -> Int32 {
+        try ensureNoUnknownFlags(arguments, allowed: ["--json", "--pretty"])
+        let pretty = arguments.contains("--pretty")
+
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+            "x-apple.systempreferences:com.apple.preference.security",
+            "x-apple.systempreferences:"
+        ]
+
+        guard let openedURL = urls.first(where: { candidate in
+            guard let url = URL(string: candidate) else { return false }
+            return NSWorkspace.shared.open(url)
+        }) else {
+            throw ShotError(
+                code: .serviceUnavailable,
+                name: "ERR_OPEN_SETTINGS_FAILED",
+                message: "Failed to open System Settings.",
+                hint: "Open System Settings > Privacy & Security > Screen Recording manually."
+            )
+        }
+
+        CLIOutput.writeJSON(
+            [
+                "ok": true,
+                "opened": [
+                    "url": openedURL
+                ]
+            ],
+            pretty: pretty
+        )
+        return ShotExitCode.ok.rawValue
+    }
+
+    private func handleRequestPermission(arguments: [String]) throws -> Int32 {
+        try ensureNoUnknownFlags(arguments, allowed: ["--json", "--pretty"])
+        let pretty = arguments.contains("--pretty")
+
+        let before = CGPreflightScreenCaptureAccess()
+        let requestReturn = CGRequestScreenCaptureAccess()
+        let after = CGPreflightScreenCaptureAccess()
+
+        var hints: [String] = []
+        if !after {
+            hints.append(screenRecordingGrantHint)
+            hints.append("Run 'shot open-permissions' to open the Screen Recording settings pane.")
+        }
+
+        CLIOutput.writeJSON(
+            [
+                "ok": after,
+                "permission": [
+                    "screenRecording": after ? "granted" : "missing"
+                ],
+                "request": [
+                    "requested": true,
+                    "preflightBefore": before,
+                    "requestReturn": requestReturn
+                ],
+                "hints": hints
+            ],
+            pretty: pretty
+        )
+
+        return after ? ShotExitCode.ok.rawValue : ShotExitCode.missingScreenRecordingPermission.rawValue
     }
 
     private func handleDisplays(arguments: [String]) throws -> Int32 {
@@ -280,7 +370,7 @@ final class ShotCLI {
                 code: .missingScreenRecordingPermission,
                 name: "ERR_PERMISSION_SCREEN_RECORDING",
                 message: "Screen Recording permission is required.",
-                hint: screenRecordingGrantHint
+                hint: screenRecordingGrantHintWithCommand
             )
         }
 
@@ -507,7 +597,7 @@ final class ShotCLI {
                 code: .missingScreenRecordingPermission,
                 name: "ERR_PERMISSION_SCREEN_RECORDING",
                 message: "Screen Recording permission is required.",
-                hint: screenRecordingGrantHint
+                hint: screenRecordingGrantHintWithCommand
             )
         }
 
