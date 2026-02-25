@@ -31,5 +31,6 @@ struct ShotCliApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 860, height: 760)
     }
 }

@@ -176,7 +176,7 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 640, minHeight: 420)
+        .frame(minWidth: 760, minHeight: 640)
         .onAppear {
             refreshPermissions()
             commandInstaller.refresh()
