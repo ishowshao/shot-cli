@@ -5,6 +5,8 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
+private let screenRecordingGrantHint = "Open ShotCli.app, click Request Permission, then enable Screen Recording in System Settings > Privacy & Security."
+
 enum ShotExitCode: Int32 {
     case ok = 0
     case invalidArguments = 2
@@ -216,14 +218,15 @@ final class ShotCLI {
 
         var hints: [String] = []
         if !hasScreenRecordingPermission {
-            hints.append("Open ShotCli.app once and enable Screen Recording in System Settings > Privacy & Security.")
+            hints.append(screenRecordingGrantHint)
         }
 
         let payload: [String: Any] = [
             "ok": hasScreenRecordingPermission,
             "service": [
                 "running": true,
-                "endpoint": "xpc"
+                "endpoint": "xpc",
+                "name": ShotCLIXPCConstants.serviceName
             ],
             "permissions": [
                 "screenRecording": hasScreenRecordingPermission ? "granted" : "missing",
@@ -272,6 +275,15 @@ final class ShotCLI {
     }
 
     private func handleWindows(arguments: [String]) throws -> Int32 {
+        guard CGPreflightScreenCaptureAccess() else {
+            throw ShotError(
+                code: .missingScreenRecordingPermission,
+                name: "ERR_PERMISSION_SCREEN_RECORDING",
+                message: "Screen Recording permission is required.",
+                hint: screenRecordingGrantHint
+            )
+        }
+
         var includeAll = false
         var appFilter: String?
         var frontmostOnly = false
@@ -495,7 +507,7 @@ final class ShotCLI {
                 code: .missingScreenRecordingPermission,
                 name: "ERR_PERMISSION_SCREEN_RECORDING",
                 message: "Screen Recording permission is required.",
-                hint: "Open ShotCli.app and enable Screen Recording in System Settings > Privacy & Security."
+                hint: screenRecordingGrantHint
             )
         }
 

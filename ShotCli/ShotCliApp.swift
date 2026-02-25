@@ -6,11 +6,6 @@ struct ShotCliApp: App {
         let rawArgs = Array(CommandLine.arguments.dropFirst())
         let args = rawArgs.filter { !$0.hasPrefix("-psn_") }
 
-        if args.first == ShotCLIXPCLaunchAgent.serviceCommand {
-            ShotCLIXPCServer.shared.startIfNeeded()
-            dispatchMain()
-        }
-
         if let first = args.first {
             let cliCommands: Set<String> = [
                 "help",

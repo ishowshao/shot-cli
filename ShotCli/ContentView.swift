@@ -58,9 +58,71 @@ private struct PermissionCard: View {
     }
 }
 
+private struct CLICommandCard: View {
+    @ObservedObject var installer: ShotCommandInstallerModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("CLI Command (`shot`)")
+                    .font(.headline)
+                Spacer()
+                Label(installer.statusTitle, systemImage: installer.statusSymbol)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(installer.statusColor)
+                    .font(.subheadline)
+            }
+
+            Text("Install a shell command so you can run `shot` directly in Terminal.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Button("Install to ~/.local/bin", action: installer.installToUserLocal)
+                    .disabled(installer.isWorking)
+                Button("Install to /usr/local/bin", action: installer.installToUsrLocal)
+                    .disabled(installer.isWorking)
+                    .help("Requires administrator authentication.")
+                Button("Uninstall", action: installer.uninstallManagedLinks)
+                    .disabled(installer.isWorking)
+                Button("Refresh", action: installer.refresh)
+                    .disabled(installer.isWorking)
+            }
+
+            if installer.isWorking {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("~/.local/bin/shot: \(installer.userLocalStatus)")
+                Text("/usr/local/bin/shot: \(installer.usrLocalStatus)")
+                Text("Shell lookup: \(installer.shellLookupStatus)")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            if !installer.guidance.isEmpty {
+                Text(installer.guidance)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !installer.feedback.isEmpty {
+                Text(installer.feedback)
+                    .font(.footnote)
+                    .foregroundStyle(installer.feedbackColor)
+            }
+        }
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
 struct ContentView: View {
     @State private var screenRecording: PermissionState = .missing
     @State private var accessibility: PermissionState = .missing
+    @StateObject private var commandInstaller = ShotCommandInstallerModel()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -70,9 +132,11 @@ struct ContentView: View {
             Text("This app does not provide screenshot UI. Use CLI commands after permissions are granted.")
                 .foregroundStyle(.secondary)
 
+            CLICommandCard(installer: commandInstaller)
+
             PermissionCard(
                 title: "Screen Recording",
-                detail: "Required for `shot capture`, `shot displays`, and `shot windows`.",
+                detail: "Required for `shot capture`, `shot displays`, and `shot windows`. Request it here first, then enable in System Settings.",
                 state: screenRecording,
                 onRequest: requestScreenRecordingPermission,
                 onOpenSettings: { openPrivacySettings(anchor: "Privacy_ScreenCapture") }
@@ -92,22 +156,31 @@ struct ContentView: View {
                 Text("Run `shot doctor --pretty` in terminal for script-friendly health checks.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Text("Permissions should be granted via this app so CLI calls go through ShotCli's XPC service identity.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text("If ShotCli does not appear in Accessibility list, move ShotCli.app to /Applications and click Request Permission again.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             HStack {
-                Button("Refresh Status", action: refreshPermissions)
+                Button("Refresh Status") {
+                    refreshPermissions()
+                    commandInstaller.refresh()
+                }
                 Spacer()
-                Text("CLI-first. GUI is permission onboarding only.")
+                Text("CLI-first. GUI handles command install and permission onboarding.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
         .padding(20)
         .frame(minWidth: 640, minHeight: 420)
-        .onAppear(perform: refreshPermissions)
+        .onAppear {
+            refreshPermissions()
+            commandInstaller.refresh()
+        }
     }
 
     private func refreshPermissions() {

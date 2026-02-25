@@ -3,6 +3,8 @@
 > 目标：提供一个 **非交互式** 的截图/枚举工具，可在脚本、CI、自动化流程中使用。  
 > 实现建议：`ShotCli.app`（原生权限与服务） + `shot`（CLI）通过 XPC 通讯；CLI 不直接触发 UI。
 
+> 验证当前 XPC 实现是否可用：见 `docs/xpc-verification.md`。
+
 ---
 
 ## 1. 设计目标
@@ -22,6 +24,8 @@
 - `ShotCli.app`：负责引导/检查权限（Screen Recording），并提供本地服务（XPC 推荐）。
 - `shot`：CLI 可执行文件。推荐放在 `ShotCli.app/Contents/MacOS/shot` 并提供软链到 PATH：
   - `/usr/local/bin/shot` 或 `~/.local/bin/shot`
+
+建议在 GUI 中提供 `Install "shot" Command` 一键安装（默认 `~/.local/bin`，无需管理员权限）。
 
 CLI 行为建议：
 - 如服务未运行，CLI 尝试启动/唤醒服务（或返回 `10`，并给出 hint）。
@@ -319,4 +323,3 @@ shot capture --display 69733248 --rect 100,200,800,600 --out /tmp/roi.png
 * 最低系统：**macOS 14+**
 * 推荐截图/枚举后端：**ScreenCaptureKit**
 * 建议通讯方式：**XPC（本地进程间通讯）**
-
