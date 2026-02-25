@@ -1,61 +1,61 @@
 # ShotCli
 
-ShotCli 是一个面向 macOS 的非交互式截图工具，提供 GUI 权限引导与 `shot` 命令行能力，适合脚本、自动化和 CI 场景。
+ShotCli is a non-interactive screenshot tool for macOS. It provides a GUI for permission onboarding and command setup, and a `shot` CLI for automation, scripting, and CI workflows.
 
-## 核心能力
+## Key Features
 
-- 非交互截图：不依赖鼠标框选 UI。
-- 显示器/窗口枚举：先查目标，再按 ID 截图。
-- 结构化输出：JSON + 稳定退出码，便于脚本处理。
-- XPC 架构：`shot` 通过本地 XPC 调用 `ShotCliXPCService` 执行截图逻辑。
+- Non-interactive capture (no mouse selection UI required)
+- Display/window enumeration before capture
+- Structured JSON output with stable exit codes
+- Local XPC architecture (`shot` -> `ShotCliXPCService`)
 
-## 架构概览
+## Architecture
 
-- `ShotCli.app`：主应用，负责权限引导、CLI 命令安装入口。
-- `shot`：CLI 入口（位于 `ShotCli.app/Contents/MacOS/shot`）。
-- `ShotCliXPCService.xpc`：内嵌 XPC 服务，执行 `doctor/displays/windows/capture`。
-- `ShotCliCore`：CLI 核心实现与 XPC 协议共享代码。
+- `ShotCli.app`: main app for permission onboarding and CLI command installation
+- `shot`: CLI entrypoint (`ShotCli.app/Contents/MacOS/shot`)
+- `ShotCliXPCService.xpc`: embedded XPC service for `doctor/displays/windows/capture`
+- `ShotCliCore`: shared CLI engine and XPC protocol
 
-## 环境要求
+## Requirements
 
 - macOS 14+
 - Xcode 26+
 
-## 快速开始
+## Quick Start
 
-### 1. 构建
+### 1. Build
 
 ```bash
 xcodebuild -project ShotCli.xcodeproj -scheme ShotCli -configuration Debug -destination 'platform=macOS' build
 ```
 
-### 2. 安装/打开 App
+### 2. Install / Launch the App
 
-建议将 `ShotCli.app` 放到 `/Applications` 后打开一次。
+Install `ShotCli.app` (recommended: `/Applications`) and open it once.
 
-### 3. 安装 `shot` 命令
+### 3. Install `shot` Command
 
-推荐在 GUI 中完成：
+Recommended via GUI:
 
-- 打开 `ShotCli.app`
-- 在 `CLI Command (shot)` 卡片点击：
-  - `Install to ~/.local/bin`（推荐，无需管理员权限）
-  - 或 `Install to /usr/local/bin`（会弹管理员授权）
+- Open `ShotCli.app`
+- In the `CLI Command (shot)` card, click:
+  - `Install to ~/.local/bin` (recommended, no admin privileges required)
+  - or `Install to /usr/local/bin` (prompts for admin authentication)
 
-也可用脚本安装：
+Script-based option:
 
 ```bash
 scripts/install-shot-link.sh --app /Applications/ShotCli.app
 ```
 
-### 4. 验证命令可用
+### 4. Verify
 
 ```bash
 shot version
 shot doctor --pretty
 ```
 
-## 命令示例
+## Command Examples
 
 ```bash
 shot displays --pretty
@@ -63,42 +63,42 @@ shot windows --pretty
 shot capture --display 4 --out ~/Downloads/lg-ultrafine.png --pretty
 ```
 
-## 权限说明
+## Permissions
 
-截图与窗口枚举依赖 Screen Recording 权限：
+Screen Recording permission is required for capture and window enumeration.
 
-- 首次可在 GUI 点击 `Request Permission`
-- 然后在系统设置中允许 ShotCli
-- 未授权时，相关命令返回退出码 `11`
+- Click `Request Permission` in `ShotCli.app`
+- Enable access for ShotCli in System Settings
+- If missing, related commands return exit code `11`
 
-## 退出码（常用）
+## Common Exit Codes
 
-- `0`：成功
-- `10`：服务不可用
-- `11`：缺少 Screen Recording 权限
-- `14`：截图/枚举失败
-- `15`：输出写入失败
+- `0`: success
+- `10`: service unavailable
+- `11`: missing Screen Recording permission
+- `14`: capture/enumeration failure
+- `15`: output write failure
 
-## 验证与排障
+## Verification & Troubleshooting
 
-详细验证手册见：
+See:
 
 - `docs/xpc-verification.md`
 
-快速自动验证：
+Quick validation script:
 
 ```bash
 scripts/verify-xpc-flow.sh --display-name "LG ULTRAFINE"
 ```
 
-## 目录结构
+## Repository Layout
 
-- `ShotCli/`：主应用（SwiftUI UI、IPC 客户端）
-- `ShotCliCore/`：CLI 核心逻辑与共享协议
-- `ShotCliXPCService/`：XPC 服务入口
-- `scripts/`：辅助脚本
-- `docs/`：设计与验证文档
+- `ShotCli/`: main app (SwiftUI UI, IPC client)
+- `ShotCliCore/`: shared CLI engine and protocol
+- `ShotCliXPCService/`: XPC service entrypoint
+- `scripts/`: helper scripts
+- `docs/`: design and verification docs
 
-## 许可证
+## License
 
-当前仓库未声明许可证，默认保留所有权利。
+No license file is currently declared in this repository. All rights reserved by default.
