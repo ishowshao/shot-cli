@@ -886,7 +886,18 @@ final class ShotCLI {
             )
         }
 
-        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let windowBounds = window.frame
+        let display = displayForWindow(windowBounds: windowBounds, displays: shareable.displays)
+        guard let display else {
+            throw ShotError(
+                code: .captureFailed,
+                name: "ERR_CAPTURE_FAILED",
+                message: "Failed to resolve display for window \(windowID).",
+                hint: nil
+            )
+        }
+
+        let filter = SCContentFilter(display: display, including: [window])
         let info = SCShareableContent.info(for: filter)
         let scale = Double(info.pointPixelScale)
 
@@ -894,16 +905,8 @@ final class ShotCLI {
         let heightPx = max(1, Int((info.contentRect.height * CGFloat(scale)).rounded()))
         var image = try captureImage(filter: filter, width: widthPx, height: heightPx)
 
+        let regionToKeep: CGRect
         if let rect {
-            guard let windowBounds = windowBoundsPx(windowID: windowID) else {
-                throw ShotError(
-                    code: .targetNotFound,
-                    name: "ERR_TARGET_NOT_FOUND",
-                    message: "windowId \(windowID) not found.",
-                    hint: nil
-                )
-            }
-
             let intersection = windowBounds.intersection(rect)
             guard !intersection.isEmptyOrNull else {
                 throw ShotError(
@@ -913,15 +916,32 @@ final class ShotCLI {
                     hint: nil
                 )
             }
-
-            let localTopLeftRect = CGRect(
-                x: intersection.minX - windowBounds.minX,
-                y: intersection.minY - windowBounds.minY,
-                width: intersection.width,
-                height: intersection.height
-            )
-            image = try cropImageFromTopLeft(image, rect: localTopLeftRect, contextFlag: "--rect")
+            regionToKeep = intersection
+        } else {
+            regionToKeep = windowBounds
         }
+
+        // Display+including capture can return a larger surface; normalize back to the requested window region.
+        let displayLocalRegion = regionToKeep.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+        let visibleRegion = displayLocalRegion.intersection(info.contentRect)
+        guard !visibleRegion.isEmptyOrNull else {
+            throw ShotError(
+                code: .captureFailed,
+                name: "ERR_CAPTURE_FAILED",
+                message: "Requested window region is outside captured content.",
+                hint: nil
+            )
+        }
+
+        var localTopLeftRect = CGRect(
+            x: floor((visibleRegion.minX - info.contentRect.minX) * CGFloat(scale)),
+            y: floor((visibleRegion.minY - info.contentRect.minY) * CGFloat(scale)),
+            width: ceil(visibleRegion.width * CGFloat(scale)),
+            height: ceil(visibleRegion.height * CGFloat(scale))
+        )
+        let imageBounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        localTopLeftRect = localTopLeftRect.intersection(imageBounds)
+        image = try cropImageFromTopLeft(image, rect: localTopLeftRect, contextFlag: rect == nil ? "--window" : "--rect")
 
         return CapturePayload(
             image: image,
@@ -1031,18 +1051,21 @@ final class ShotCLI {
         }
     }
 
-    private func windowBoundsPx(windowID: UInt32) -> CGRect? {
-        guard let infos = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]],
-              let windowInfo = infos.first(where: {
-                  ((($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value) == windowID)
-              }),
-              let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
-              let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-        else {
-            return nil
+    private func displayForWindow(windowBounds: CGRect, displays: [SCDisplay]) -> SCDisplay? {
+        let center = CGPoint(x: windowBounds.midX, y: windowBounds.midY)
+        if let exact = displays.first(where: { $0.frame.contains(center) }) {
+            return exact
         }
 
-        return rect
+        let best = displays
+            .map { display -> (display: SCDisplay, area: CGFloat) in
+                let intersection = windowBounds.intersection(display.frame)
+                return (display: display, area: intersection.isNull ? 0 : intersection.width * intersection.height)
+            }
+            .max { $0.area < $1.area }
+
+        guard let best, best.area > 0 else { return nil }
+        return best.display
     }
 
     private func cropImageFromTopLeft(_ image: CGImage, rect: CGRect, contextFlag: String) throws -> CGImage {
