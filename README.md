@@ -60,7 +60,10 @@ shot doctor --pretty
 shot displays --pretty
 shot windows --pretty
 shot capture --display 4 --out ~/Downloads/lg-ultrafine.png --pretty
+shot capture --window 7874 --out ~/Downloads/window-7874.png --pretty
 ```
+
+Note: use `--out` for file output (`--output` is not a supported flag).
 
 ## Permissions
 
@@ -76,8 +79,10 @@ Screen Recording permission is required for `shot windows` and `shot capture`.
 ## Common Exit Codes
 
 - `0`: success
+- `2`: invalid arguments
 - `10`: unavailable helper action (for example, failed to open System Settings)
 - `11`: missing Screen Recording permission
+- `13`: target not found (display/window/rect intersection)
 - `14`: capture/enumeration failure
 - `15`: output write failure
 
